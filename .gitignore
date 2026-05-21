@@ -31,9 +31,22 @@ out/
 finwatch/evidence/
 
 # Editor / OS / IDE state
-.claude/
 .vscode/
 .idea/
+
+# AI agent / coding-assistant files (local to each developer)
+.claude/
+CLAUDE.md
+**/CLAUDE.md
+AGENTS.md
+**/AGENTS.md
+.cursor/
+.cursorrules
+.aider*
+.continue/
+.github/copilot-instructions.md
+.windsurfrules
+.codeium/
 *.swp
 *.swo
 .DS_Store

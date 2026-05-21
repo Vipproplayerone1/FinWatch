@@ -1,0 +1,14 @@
+apiVersion: 1
+datasources:
+  - name: ClickHouse
+    type: grafana-clickhouse-datasource
+    access: proxy
+    url: http://clickhouse:8123
+    jsonData:
+      defaultDatabase: finwatch
+      port: 9000
+      server: clickhouse
+      username: default
+    secureJsonData:
+      password: clickhouse_secret_2024
+    isDefault: false

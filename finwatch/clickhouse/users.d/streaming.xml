@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<!--
+  Lower the default Kafka-engine flush interval so end-to-end latency
+  (PG insert → queryable in ClickHouse) stays well under the < 5000 ms
+  thesis target. Default in ClickHouse 24.x is 7500 ms.
+  These are profile-level settings, not table-level Kafka SETTINGS.
+-->
+<clickhouse>
+  <profiles>
+    <default>
+      <stream_flush_interval_ms>500</stream_flush_interval_ms>
+      <stream_poll_timeout_ms>200</stream_poll_timeout_ms>
+    </default>
+  </profiles>
+</clickhouse>

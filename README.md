@@ -1,0 +1,208 @@
+# FinWatch — Near Real-Time Financial Transaction Monitoring
+
+> **Graduation thesis project** — *Design and Implementation of a Near Real-Time Financial Transaction Monitoring System Using Debezium, Kafka, and ClickHouse* (Vi: *Thiết kế hệ thống giám sát giao dịch tài chính gần thời gian thực sử dụng Debezium, Kafka và ClickHouse*).
+
+End-to-end CDC pipeline that captures transactional changes from an OLTP database and analyses them in real time for fraud and anomaly detection.
+
+```
+PostgreSQL (WAL)  →  Debezium  →  Kafka  →  ClickHouse  →  Grafana
+```
+
+The full operational reference for agents working on the stack is in [`CLAUDE.md`](./CLAUDE.md). The runnable stack lives under [`finwatch/`](./finwatch).
+
+---
+
+## 1. Why this project
+
+Digital payment platforms in Vietnam (MoMo, ZaloPay, VNPay, …) process huge transaction volumes daily. Traditional batch monitoring leaves hours-to-days of delay between a transaction and its anomaly signal — slow reconciliation, weak fraud response, operational blind spots.
+
+FinWatch addresses this by combining **CDC + streaming + columnar OLAP** into a single platform that captures DB changes with sub-second latency, persists them durably through Kafka, and exposes them for sub-second analytical queries and rule-based / statistical anomaly detection.
+
+---
+
+## 2. Objectives
+
+1. Capture DB changes with **sub-second latency** using log-based CDC.
+2. Stream events through a **distributed, fault-tolerant** queue.
+3. Store and aggregate in a **columnar OLAP** engine optimised for real-time analytics.
+4. Detect anomalies with **velocity, z-score, and threshold** rules.
+5. Surface results on **real-time dashboards** for ops, fraud, finance, and management.
+
+### In scope
+CDC pipeline (Postgres → Debezium → Kafka), analytical pipeline (Kafka → ClickHouse), SQL anomaly detection, dashboards, benchmarking, containerised deployment.
+
+### Out of scope
+ML-based fraud models, Kubernetes prod deployment, multi-region HA, real payment-gateway integration, PCI-DSS compliance, mobile app.
+
+---
+
+## 3. Architecture
+
+| Layer | Component | Purpose |
+|---|---|---|
+| Source | PostgreSQL 15 (logical WAL) | OLTP system of record |
+| CDC | Debezium 2.5 (Kafka Connect) | Stream row-level changes |
+| Bus | Apache Kafka 7.6 | Durable, partitioned event backbone |
+| Analytics | ClickHouse 24.3 | Columnar OLAP + materialized views |
+| Visualisation | Grafana 10.3 | Dashboards, alerting, ad-hoc analysis |
+| Monitoring | Prometheus 2.50 | Metrics scraping |
+| Orchestration | Docker Compose | Reproducible local deployment |
+
+Data flow:
+
+```
+PostgreSQL (WAL, pgoutput)
+  → Debezium PostgresConnector (ExtractNewRecordState SMT)
+  → Kafka topics finwatch.public.{accounts,merchants,transactions}
+  → ClickHouse Kafka Engine tables (JSONEachRow)
+  → Materialized views (decimal/timestamp casts)
+  → ReplacingMergeTree(_source_ts_ms) target tables
+  → Grafana
+```
+
+Design notes live in [`finwatch/docs/architecture.md`](./finwatch/docs/architecture.md).
+
+---
+
+## 4. Quick start
+
+Tested on Windows 11 + Docker Desktop. All commands run from `finwatch/`.
+
+```bash
+# 1. Activate the Conda env (needed for Python scripts/tests)
+conda activate C:\ProgramData\miniconda3\envs\graduate_env
+pip install -r scripts/requirements.txt
+
+# 2. Bring up the full stack
+docker compose up -d
+
+# 3. Wait ~60s, then register the Debezium connector (idempotent)
+python scripts/wait_for_services.py
+
+# 4. Generate synthetic traffic and inject fraud patterns
+python scripts/generate_transactions.py --count 2000 --tps 200
+python scripts/simulate_fraud.py --pattern all
+```
+
+Endpoints:
+
+| Service | URL | Credentials |
+|---|---|---|
+| Kafka browser (internal) | http://localhost:3002/kafka | – |
+| Debezium REST | http://localhost:8083 | – |
+| ClickHouse HTTP | http://localhost:8123 | `default` / see `.env` |
+| Grafana | http://localhost:3000 | admin / admin |
+| Prometheus | http://localhost:9090 | – |
+
+The `FinWatch — Pipeline Health` dashboard is auto-provisioned in Grafana under the `FinWatch` folder.
+
+---
+
+## 5. Repository layout
+
+```
+Graduate_Project/
+├── README.md                          # this file
+├── CLAUDE.md                          # operational reference for AI agents
+├── finwatch-test-cases.md             # graded test scenarios
+├── FinWatch_Module_*.docx             # thesis modules (Vietnamese)
+├── docs/                              # thesis-level documentation
+└── finwatch/                          # runnable stack
+    ├── docker-compose.yml             # all services
+    ├── .env / .env.example
+    ├── HANDIN_CHECKLIST.md            # grading checklist
+    ├── postgres/
+    │   ├── postgresql.conf            # WAL config (logical replication)
+    │   └── init/01_init_schema.sql    # schema, seed data, publication
+    ├── debezium/connectors/           # finwatch-connector.json
+    ├── kafka/scripts/                 # topic helpers
+    ├── clickhouse/
+    │   ├── config/                    # server config
+    │   ├── users.d/                   # profile overrides (stream_flush_interval_ms)
+    │   ├── init/                      # Kafka engine, target tables, MVs
+    │   └── queries/                   # anomaly + dashboard SQL
+    ├── grafana/provisioning/          # datasources + dashboards
+    ├── prometheus/prometheus.yml
+    ├── pytest.ini                     # registers `slow` marker
+    ├── scripts/                       # load gen, fraud sim, benchmarks, evidence collector
+    ├── tests/                         # pytest health / integrity / anomaly / schema-evolution / stress
+    ├── evidence/                      # output of scripts/collect_evidence.py (gitignored)
+    └── docs/
+        ├── architecture.md
+        ├── runbook.md
+        └── tutorial/                  # 8-chapter walkthrough
+```
+
+---
+
+## 6. Anomaly detection
+
+SQL rules in `finwatch/clickhouse/queries/`:
+
+| File | Rule |
+|---|---|
+| `anomaly_velocity_check.sql` | > 10 txn or > 50M VND per account in any 5-minute window |
+| `anomaly_zscore.sql` | Per-account z-score > 3 vs. 30-day history |
+| `anomaly_threshold.sql` | Large amount, high-risk merchant, multi-currency, failure spike |
+| `dashboard_queries.sql` | Volume, type mix, top merchants, ingestion lag |
+
+Always query target tables with `FINAL` and filter `cdc_op != 'd'` (see CLAUDE.md §8).
+
+---
+
+## 7. Key design decisions
+
+- **JSON converter** (not Avro) end-to-end → simpler ClickHouse `JSONEachRow` ingestion. Switching to Avro would require adding a schema registry and updating all `kafka_format` settings — out of scope.
+- **`ExtractNewRecordState` SMT** flattens Debezium envelopes; preserves `op`, `table`, `source.ts_ms` as `__op`, `__table`, `__source_ts_ms`.
+- **`ReplacingMergeTree(_source_ts_ms)`** handles upsert / duplicate semantics from at-least-once delivery. All reads use `FINAL`.
+- **Decimals as String** end-to-end (`decimal.handling.mode=string`) → cast with `toDecimal128(...,2)` in the MV — avoids precision loss.
+- **Timestamps as epoch ms** → converted with `fromUnixTimestamp64Milli(coalesce(created_at, __source_ts_ms))`, stored in `Asia/Ho_Chi_Minh`.
+
+---
+
+## 8. Performance targets & benchmarks
+
+| Metric | Target |
+|---|---:|
+| End-to-end latency (DB commit → queryable in ClickHouse) | < 5 s |
+| Debezium capture delay | < 1 s |
+| Kafka → ClickHouse ingestion | < 3 s |
+| Dashboard refresh | 5–10 s |
+| Sustained insert throughput | > 1 000 TPS |
+| Recovery after component failure | < 60 s |
+
+Reproduce:
+
+```bash
+python scripts/benchmark_latency.py --samples 20         # avg ~1000 ms (target < 5000)
+python scripts/benchmark_throughput.py --total 10000     # ~1800 TPS (target > 1000)
+pytest tests/ -v                                         # 22 fast tests (health + integrity + anomaly + schema)
+pytest tests/test_stress.py -v -m slow                   # 1 slow test, 100k-txn stress (~2 min)
+python scripts/collect_evidence.py                       # bundles everything into evidence/<timestamp>/ for Chapter 5
+```
+
+Measured 2026-05-19 with `stream_flush_interval_ms=500`: latency avg 1090 ms / p95 2128 ms, throughput 1778 TPS, 100k stress sustains 1896 TPS with 2.1 s catch-up and zero data loss.
+
+---
+
+## 9. Operations
+
+`finwatch/docs/runbook.md` covers: stack start/stop/reset, connector restart, replication-slot growth, Kafka / Debezium / ClickHouse recovery, and adding new tables to the CDC pipeline. CLAUDE.md §10 has the most common commands inline.
+
+---
+
+## 10. Tutorial & deliverables
+
+- [`finwatch/docs/tutorial/`](./finwatch/docs/tutorial) — eight-chapter walkthrough mirroring how the system was built (Postgres → Debezium → Kafka → ClickHouse → dashboards).
+- `FinWatch_Module_*.docx` — Vietnamese thesis modules (foundation, Python DE, SQL, Docker, Postgres WAL, Kafka, Debezium, ClickHouse, anomaly detection).
+- `finwatch-test-cases.md` — graded scenarios.
+- `finwatch/HANDIN_CHECKLIST.md` — grading checklist.
+
+---
+
+## 11. Author
+
+- **Student:** Bùi Hoàng Nhân
+- **Student ID:** 21040009
+- **Class:** 21DS
+- **Supervisor:** Trần Thế Vũ

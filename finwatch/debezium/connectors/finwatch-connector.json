@@ -1,0 +1,41 @@
+{
+  "name": "finwatch-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "debezium",
+    "database.password": "debezium_secret_2024",
+    "database.dbname": "finwatch",
+
+    "topic.prefix": "finwatch",
+    "plugin.name": "pgoutput",
+    "slot.name": "finwatch_slot",
+    "publication.name": "finwatch_pub",
+
+    "table.include.list": "public.accounts,public.merchants,public.transactions",
+
+    "key.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "key.converter.schemas.enable": "false",
+    "value.converter": "org.apache.kafka.connect.json.JsonConverter",
+    "value.converter.schemas.enable": "false",
+
+    "transforms": "unwrap",
+    "transforms.unwrap.type": "io.debezium.transforms.ExtractNewRecordState",
+    "transforms.unwrap.drop.tombstones": "true",
+    "transforms.unwrap.delete.handling.mode": "rewrite",
+    "transforms.unwrap.add.fields": "op,table,source.ts_ms",
+
+    "decimal.handling.mode": "string",
+    "time.precision.mode": "connect",
+    "tombstones.on.delete": "false",
+
+    "heartbeat.interval.ms": "5000",
+    "snapshot.mode": "initial",
+
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
+  }
+}

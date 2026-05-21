@@ -1,0 +1,152 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": { "type": "datasource", "uid": "grafana" },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "description": "FinWatch — end-to-end pipeline health (Postgres -> Debezium -> Kafka -> ClickHouse).",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "iteration": 1,
+  "links": [],
+  "liveNow": false,
+  "panels": [
+    {
+      "title": "Transactions per minute (last hour)",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 0 },
+      "id": 1,
+      "fieldConfig": {
+        "defaults": { "unit": "short", "color": { "mode": "palette-classic" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSql": "SELECT toStartOfMinute(created_at) AS time, count() AS txn_count FROM finwatch.transactions FINAL WHERE created_at >= now() - INTERVAL 1 HOUR AND cdc_op != 'd' GROUP BY time ORDER BY time"
+        }
+      ]
+    },
+    {
+      "title": "Total amount per minute (VND)",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 0 },
+      "id": 2,
+      "fieldConfig": {
+        "defaults": { "unit": "currencyVND", "color": { "mode": "palette-classic" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSql": "SELECT toStartOfMinute(created_at) AS time, sum(toFloat64(amount)) AS total_amount FROM finwatch.transactions FINAL WHERE created_at >= now() - INTERVAL 1 HOUR AND cdc_op != 'd' GROUP BY time ORDER BY time"
+        }
+      ]
+    },
+    {
+      "title": "End-to-end ingestion lag (ms)",
+      "type": "timeseries",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "id": 3,
+      "fieldConfig": {
+        "defaults": { "unit": "ms", "color": { "mode": "palette-classic" } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSql": "SELECT toStartOfMinute(_ingested_at) AS time, avg(dateDiff('millisecond', created_at, _ingested_at)) AS avg_lag_ms, max(dateDiff('millisecond', created_at, _ingested_at)) AS max_lag_ms FROM finwatch.transactions WHERE _ingested_at >= now() - INTERVAL 1 HOUR GROUP BY time ORDER BY time"
+        }
+      ]
+    },
+    {
+      "title": "Transaction status mix (last hour)",
+      "type": "piechart",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "id": 4,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "right", "showLegend": true },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSql": "SELECT status, count() AS c FROM finwatch.transactions FINAL WHERE created_at >= now() - INTERVAL 1 HOUR AND cdc_op != 'd' GROUP BY status"
+        }
+      ]
+    },
+    {
+      "title": "Velocity anomalies (last 5 min, > 10 txn or > 50M VND)",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 18 },
+      "id": 5,
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSql": "SELECT account_id, count() AS txn_count, sum(toFloat64(amount)) AS total_amount, min(created_at) AS window_start, max(created_at) AS window_end FROM finwatch.transactions FINAL WHERE created_at >= now() - INTERVAL 5 MINUTE AND cdc_op != 'd' GROUP BY account_id HAVING txn_count > 10 OR total_amount > 50000000 ORDER BY txn_count DESC"
+        }
+      ]
+    },
+    {
+      "title": "Top merchants (last 24h)",
+      "type": "table",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "clickhouse" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 27 },
+      "id": 6,
+      "options": { "showHeader": true },
+      "targets": [
+        {
+          "refId": "A",
+          "format": 1,
+          "rawSql": "SELECT m.name AS merchant, m.category, m.risk_level, count() AS txn_count, sum(toFloat64(t.amount)) AS total_amount FROM finwatch.transactions t FINAL INNER JOIN finwatch.merchants m FINAL ON t.merchant_id = m.id WHERE t.created_at >= now() - INTERVAL 24 HOUR AND t.cdc_op != 'd' GROUP BY m.name, m.category, m.risk_level ORDER BY total_amount DESC LIMIT 20"
+        }
+      ]
+    }
+  ],
+  "refresh": "10s",
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["finwatch", "pipeline", "cdc"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "FinWatch — Pipeline Health",
+  "uid": "finwatch-pipeline-health",
+  "version": 1,
+  "weekStart": ""
+}

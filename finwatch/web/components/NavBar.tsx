@@ -7,6 +7,8 @@ const LINKS = [
   { href: "/architecture", label: "Architecture"   },
   { href: "/trace",        label: "Trace"          },
   { href: "/fraud",        label: "Fraud rules"    },
+  { href: "/accounts",     label: "Accounts"       },
+  { href: "/alerts",       label: "Alerts"         },
   { href: "/kafka",        label: "Kafka"          },
   { href: "/demo",         label: "Insert & trace" },
 ];

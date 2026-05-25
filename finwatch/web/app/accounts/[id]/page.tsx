@@ -78,10 +78,14 @@ function RuleBadge({ rule }: { rule: string }) {
   );
 }
 
+const TOPUP_PRESETS = [1_000_000, 10_000_000, 100_000_000];
+
 export default function AccountDetailPage({ params }: { params: { id: string } }) {
   const id = params.id;
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [topupOpen, setTopupOpen] = useState(false);
+  const [topupAmount, setTopupAmount] = useState<string>("10000000");
 
   const acctReq  = useSWR<{ account: Account; error?: string }>(`/api/accounts/${id}`,              fetcher, { refreshInterval: 5000 });
   const txnReq   = useSWR<{ rows: Txn[]    ; error?: string }>(`/api/accounts/${id}/transactions`,  fetcher, { refreshInterval: 5000 });
@@ -105,6 +109,37 @@ export default function AccountDetailPage({ params }: { params: { id: string } }
       }
       // Force SWR to refetch immediately.
       acctReq.mutate();
+    } catch (e) {
+      setActionError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitTopup() {
+    if (busy) return;
+    const amt = Number(topupAmount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      setActionError("Top-up amount must be > 0");
+      return;
+    }
+    setBusy(true);
+    setActionError(null);
+    try {
+      const r = await fetch(`/api/accounts/${id}/topup`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: amt }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setActionError(body.error ?? `HTTP ${r.status}`);
+      } else {
+        setTopupOpen(false);
+        // Trigger immediate refetch — balance + transactions panel.
+        acctReq.mutate();
+        txnReq.mutate();
+      }
     } catch (e) {
       setActionError((e as Error).message);
     } finally {
@@ -139,16 +174,25 @@ export default function AccountDetailPage({ params }: { params: { id: string } }
                 <div className="font-mono text-3xl kpi-value">
                   {formatVND(Number(account.balance), account.currency)}
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap justify-end">
                   <StatusBadge status={account.status} />
                   {account.status === "active" && (
-                    <button
-                      disabled={busy}
-                      onClick={() => lockOrUnlock("lock")}
-                      className="px-3 py-1.5 rounded text-sm bg-accent-danger/20 text-accent-danger border border-accent-danger/40 hover:bg-accent-danger/30 disabled:opacity-50"
-                    >
-                      Suspend
-                    </button>
+                    <>
+                      <button
+                        disabled={busy}
+                        onClick={() => { setActionError(null); setTopupOpen((v) => !v); }}
+                        className="px-3 py-1.5 rounded text-sm bg-accent/20 text-accent border border-accent/40 hover:bg-accent/30 disabled:opacity-50"
+                      >
+                        {topupOpen ? "Cancel" : "Top up balance"}
+                      </button>
+                      <button
+                        disabled={busy}
+                        onClick={() => lockOrUnlock("lock")}
+                        className="px-3 py-1.5 rounded text-sm bg-accent-danger/20 text-accent-danger border border-accent-danger/40 hover:bg-accent-danger/30 disabled:opacity-50"
+                      >
+                        Suspend
+                      </button>
+                    </>
                   )}
                   {account.status === "suspended" && (
                     <button
@@ -160,6 +204,39 @@ export default function AccountDetailPage({ params }: { params: { id: string } }
                     </button>
                   )}
                 </div>
+                {topupOpen && account.status === "active" && (
+                  <div className="mt-1 flex flex-col gap-2 items-end">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min={1}
+                        value={topupAmount}
+                        onChange={(e) => setTopupAmount(e.target.value)}
+                        placeholder="Amount in VND"
+                        className="w-44 px-2 py-1.5 rounded bg-[#0c1220] border border-bg-ring/60 text-sm font-mono text-gray-200 focus:outline-none focus:border-accent/60"
+                      />
+                      <button
+                        disabled={busy}
+                        onClick={submitTopup}
+                        className="px-3 py-1.5 rounded text-sm bg-accent-ok/20 text-accent-ok border border-accent-ok/40 hover:bg-accent-ok/30 disabled:opacity-50"
+                      >
+                        {busy ? "Posting…" : "Confirm deposit"}
+                      </button>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      {TOPUP_PRESETS.map((n) => (
+                        <button
+                          key={n}
+                          type="button"
+                          onClick={() => setTopupAmount(String(n))}
+                          className="px-2 py-0.5 text-[11px] rounded bg-bg-ring/40 text-gray-300 hover:bg-bg-ring/60"
+                        >
+                          +{(n / 1_000_000).toLocaleString()}M
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {actionError && <div className="text-xs text-accent-danger">Error: {actionError}</div>}
               </div>
             </header>

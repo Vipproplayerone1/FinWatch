@@ -171,6 +171,41 @@ services:
       - finwatch-net
 
   # ============================================
+  # Fraud Alert Worker — runs the six anomaly queries against ClickHouse
+  # every 30s and writes new cases into Postgres fraud_alerts (1h dedup
+  # per account+rule). CDC carries the rows back into ClickHouse for the UI.
+  # ============================================
+  fraud-worker:
+    image: python:3.11-slim
+    container_name: finwatch-fraud-worker
+    working_dir: /app
+    volumes:
+      - ./scripts:/app/scripts:ro
+      - ./clickhouse/queries:/app/clickhouse/queries:ro
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      CLICKHOUSE_HTTP_URL: http://clickhouse:8123
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DATABASE: ${CLICKHOUSE_DB}
+      PYTHONUNBUFFERED: "1"
+    command: >
+      sh -c "pip install --no-cache-dir psycopg2-binary==2.9.9 requests==2.31.0 &&
+             python scripts/fraud_alert_worker.py --interval 30"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - finwatch-net
+
+  # ============================================
   # FinWatch Web UI — Live demo dashboard
   # ============================================
   web:

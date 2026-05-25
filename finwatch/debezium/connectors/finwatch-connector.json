@@ -15,7 +15,7 @@
     "slot.name": "finwatch_slot",
     "publication.name": "finwatch_pub",
 
-    "table.include.list": "public.accounts,public.merchants,public.transactions",
+    "table.include.list": "public.accounts,public.merchants,public.transactions,public.fraud_alerts",
 
     "key.converter": "org.apache.kafka.connect.json.JsonConverter",
     "key.converter.schemas.enable": "false",

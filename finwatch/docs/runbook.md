@@ -105,6 +105,46 @@ docker exec finwatch-clickhouse clickhouse-client -q "SELECT count() FROM finwat
 # Expected: 12
 ```
 
+## Fraud worker
+
+The `fraud-worker` service runs `scripts/fraud_alert_worker.py --interval 30`. It calls the
+six `clickhouse/queries/anomaly_*.sql` queries against ClickHouse, classifies severity per
+rule, aggregates per account, and writes new rows into Postgres `fraud_alerts` (1 h dedup
+per `(account_id, rule_code)`). CDC carries the new rows back into ClickHouse.
+
+### Start / stop / restart
+```bash
+docker compose up -d fraud-worker
+docker compose stop fraud-worker
+docker compose restart fraud-worker
+docker compose logs -f fraud-worker
+```
+
+Log format per tick (one line per rule):
+```
+[worker] rule=VELOCITY  new=3 dedup=12 elapsed=180ms
+[worker] rule=ZSCORE    new=0 dedup=0  elapsed=92ms
+[worker] rule=LARGE_AMT new=1 dedup=4  elapsed=110ms
+...
+```
+
+### Ad-hoc / single-pass run (from the host)
+```bash
+conda activate C:\ProgramData\miniconda3\envs\graduate_env
+python scripts/fraud_alert_worker.py --once          # one pass, then exit
+python scripts/fraud_alert_worker.py --interval 10   # tight loop for live demos
+```
+
+### Diagnosing "no alerts being created"
+1. Postgres reachable? `docker exec finwatch-postgres psql -U finwatch -d finwatch -c "SELECT 1"`.
+2. ClickHouse reachable from worker? `docker exec finwatch-fraud-worker python -c "import requests; print(requests.get('http://clickhouse:8123/ping').text)"`.
+3. Anomaly query actually returning rows? Pick one rule and run it manually:
+   `docker exec finwatch-clickhouse clickhouse-client --multiquery < clickhouse/queries/anomaly_velocity_check.sql`.
+4. Dedup blocking new inserts? Check the 1 h window:
+   `docker exec finwatch-postgres psql -U finwatch -d finwatch -c "SELECT rule_code, count(*), min(created_at), max(created_at) FROM fraud_alerts WHERE created_at > NOW() - INTERVAL '1 hour' GROUP BY 1;"`.
+   Wait for the window to slide, or `TRUNCATE fraud_alerts` if you need a clean slate.
+5. CDC round-trip stuck? Verify the `finwatch_pub` publication includes `public.fraud_alerts` and that the connector's `table.include.list` matches.
+
 ## Common Error Messages
 
 | Error | Cause | Solution |

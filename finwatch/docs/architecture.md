@@ -91,6 +91,75 @@ ClickHouse uses **ReplacingMergeTree** engine with `_source_ts_ms` as the versio
 - Queries use the `FINAL` keyword to get deduplicated results before merges complete.
 - This handles at-least-once delivery from Kafka and CDC update events.
 
+## Fraud workflow layer
+
+On top of the pipeline, FinWatch adds a closed **detect → action → reject** loop so the
+demo behaves like a real fraud-monitoring system, not just a CDC showcase.
+
+**Moving parts:**
+
+1. **`fraud_alerts` table** (Postgres) — an immutable case log:
+   `id, account_id, rule_code, severity, txn_count, total_amount, evidence (JSONB),
+   status (open/closed_fraud/closed_clean), notes, created_at, resolved_at`.
+   Replicated through Debezium → Kafka → ClickHouse exactly like the other three
+   tables. See `postgres/init/02_fraud_workflow.sql` and `clickhouse/init/05_fraud_alerts.sql`.
+
+2. **`fraud_alert_worker.py`** — every 30 s, runs the six existing
+   `clickhouse/queries/anomaly_*.sql` queries against ClickHouse, classifies severity per
+   rule, aggregates rows by `account_id`, and inserts new cases into Postgres
+   `fraud_alerts`. Dedup window: 1 hour per `(account_id, rule_code)`.
+
+3. **Application-layer balance ledger** — `accounts.balance` is updated inside every
+   transaction-creating code path (`/api/insert-transaction`,
+   `scripts/generate_transactions.py`, `scripts/simulate_fraud.py`) using
+   `SELECT … FOR UPDATE` on the account row. Suspended/closed accounts → the txn lands
+   as `status='failed'`, description `rejected: account <status>`. Debit with insufficient
+   balance → `status='failed'`, description `insufficient funds`. The ledger is enforced
+   in application code rather than a Postgres trigger so the simulator (which inserts
+   directly to PG, bypassing the API) follows the same rules.
+
+4. **Lock / unlock UI** — `/accounts/[id]` shows balance, status, last 20 txns and last 20
+   alerts. **Suspend** / **Reactivate** buttons call `POST /api/accounts/[id]/lock` and
+   `/unlock`, which flip `accounts.status`. Within ~1 s, all three transaction-creating
+   paths refuse to insert `completed` rows for that account.
+
+**Closed-loop sequence:**
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Client as Generator / simulator / UI
+    participant API as /api/insert-transaction
+    participant PG as Postgres (accounts, transactions, fraud_alerts)
+    participant Dbz as Debezium → Kafka
+    participant CH as ClickHouse (FINAL views)
+    participant W as fraud_alert_worker
+    participant Analyst as Analyst (/accounts/[id])
+
+    Client->>API: insert(account, amount, type)
+    API->>PG: BEGIN; SELECT balance,status FROM accounts FOR UPDATE
+    alt status != active
+        API->>PG: INSERT txn (status='failed', desc='rejected: account ...')
+    else debit & balance < amount
+        API->>PG: INSERT txn (status='failed', desc='insufficient funds')
+    else accepted
+        API->>PG: INSERT txn (status='completed') ; UPDATE accounts SET balance=balance±amount
+    end
+    PG-->>API: COMMIT
+    PG->>Dbz: WAL change events
+    Dbz->>CH: JSON event into transactions_kafka → mv → transactions
+    Note over W,CH: every 30 s
+    W->>CH: anomaly_*.sql (FINAL, cdc_op != 'd')
+    CH-->>W: candidate rows
+    W->>PG: INSERT INTO fraud_alerts (dedup by (account_id, rule_code, 1h))
+    PG->>Dbz: WAL change event
+    Dbz->>CH: fraud_alerts_kafka → mv → fraud_alerts
+    Analyst->>CH: GET /accounts/[id]/alerts (FINAL)
+    Analyst->>API: POST /api/accounts/[id]/lock
+    API->>PG: UPDATE accounts SET status='suspended'
+    Note over Client,PG: All three insert paths now route this account's txns to status='failed'.
+```
+
 ## Fault Tolerance
 
 | Component | Recovery Mechanism |

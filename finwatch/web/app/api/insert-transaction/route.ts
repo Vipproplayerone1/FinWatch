@@ -98,6 +98,7 @@ export async function POST(req: Request) {
       return NextResponse.json({
         accepted: false,
         reason: acct.status,
+        id: r.rows[0].id,
         txn_id: r.rows[0].id,
         created_at: r.rows[0].created_at,
         submitted_at_ms: submittedAt,
@@ -113,6 +114,7 @@ export async function POST(req: Request) {
       return NextResponse.json({
         accepted: false,
         reason: "insufficient_funds",
+        id: r.rows[0].id,
         txn_id: r.rows[0].id,
         created_at: r.rows[0].created_at,
         balance,
@@ -132,6 +134,7 @@ export async function POST(req: Request) {
     await client.query("COMMIT");
     return NextResponse.json({
       accepted: true,
+      id: r.rows[0].id,
       txn_id: r.rows[0].id,
       created_at: r.rows[0].created_at,
       new_balance: Number(upd.rows[0].balance),

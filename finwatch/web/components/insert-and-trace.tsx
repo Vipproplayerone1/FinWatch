@@ -100,11 +100,27 @@ export function InsertAndTrace() {
       const j = await r.json();
       if (!r.ok) { setToast({ kind: "err", msg: j.error ?? r.statusText }); setBusy(null); setStages(INITIAL_STAGES); return; }
 
-      const id: string = j.id;
+      const id: string | undefined = j.id ?? j.txn_id;
+      if (!id) {
+        setToast({ kind: "err", msg: "Insert succeeded but API returned no row id" });
+        setBusy(null);
+        setStages(INITIAL_STAGES);
+        return;
+      }
       setLastId(id);
       const pgMs = Date.now() - submittedAt;
       setStages({ pg: "done", pgMs, debe: "active", kafka: "pending", ch: "pending" });
-      setToast({ kind: "ok", msg: `Inserted ${id.slice(0, 8)}… — waiting for CDC` });
+
+      // The ledger may have rejected the txn (status='failed' with a reason).
+      // The row still exists in PG and will propagate to CH, so we keep tracing,
+      // but tell the user up front so the toast isn't misleading.
+      const headline =
+        j.accepted === false
+          ? (j.reason === "insufficient_funds"
+              ? `Rejected (insufficient funds) · row ${id.slice(0, 8)}… still flows to CDC`
+              : `Rejected (account ${j.reason}) · row ${id.slice(0, 8)}… still flows to CDC`)
+          : `Inserted ${id.slice(0, 8)}… — waiting for CDC`;
+      setToast({ kind: j.accepted === false ? "err" : "ok", msg: headline });
 
       // Poll for the row to appear in ClickHouse. Use the same submittedAt
       // baseline so per-hop "ms" is consistent.

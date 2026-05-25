@@ -73,17 +73,87 @@ def _random_merchant(conn, risk_level=None):
         return cur.fetchone()
 
 
+DEBIT_TYPES = {"purchase", "transfer", "withdrawal"}
+
+
 def _insert(conn, account_id, merchant_id, amount, currency, txn_type, status, description, meta):
-    with conn.cursor() as cur:
-        cur.execute(
-            """
-            INSERT INTO transactions
-              (account_id, merchant_id, amount, currency, type, status, description, metadata)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (account_id, merchant_id, amount, currency, txn_type, status, description, json.dumps(meta)),
-        )
-    conn.commit()
+    """Insert one simulator txn under the ledger contract.
+
+    The caller's `status` is treated as the *intent*. The ledger may override it:
+      - Account is not 'active'      -> status='failed', description='rejected: account <status>'.
+      - Intent='completed', debit type, insufficient balance -> status='failed',
+        description='insufficient funds'.
+      - Intent='failed'              -> recorded as-is, no balance change (card-testing depends on this).
+      - Intent='completed', balance OK -> recorded as completed, balance debited or credited.
+    """
+    from decimal import Decimal
+    amt = Decimal(str(amount))
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT balance, status FROM accounts WHERE id = %s FOR UPDATE",
+                (account_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                conn.rollback()
+                return
+            balance, acct_status = row[0], row[1]
+
+            if acct_status != "active":
+                cur.execute(
+                    """
+                    INSERT INTO transactions
+                      (account_id, merchant_id, amount, currency, type, status, description, metadata)
+                    VALUES (%s, %s, %s, %s, %s, 'failed', %s, %s)
+                    """,
+                    (account_id, merchant_id, amt, currency, txn_type,
+                     f"rejected: account {acct_status}", json.dumps(meta)),
+                )
+                conn.commit()
+                return
+
+            if status == "failed":
+                cur.execute(
+                    """
+                    INSERT INTO transactions
+                      (account_id, merchant_id, amount, currency, type, status, description, metadata)
+                    VALUES (%s, %s, %s, %s, %s, 'failed', %s, %s)
+                    """,
+                    (account_id, merchant_id, amt, currency, txn_type, description, json.dumps(meta)),
+                )
+                conn.commit()
+                return
+
+            if txn_type in DEBIT_TYPES and balance < amt:
+                cur.execute(
+                    """
+                    INSERT INTO transactions
+                      (account_id, merchant_id, amount, currency, type, status, description, metadata)
+                    VALUES (%s, %s, %s, %s, %s, 'failed', 'insufficient funds', %s)
+                    """,
+                    (account_id, merchant_id, amt, currency, txn_type, json.dumps(meta)),
+                )
+                conn.commit()
+                return
+
+            sign = -1 if txn_type in DEBIT_TYPES else 1
+            cur.execute(
+                """
+                INSERT INTO transactions
+                  (account_id, merchant_id, amount, currency, type, status, description, metadata)
+                VALUES (%s, %s, %s, %s, %s, 'completed', %s, %s)
+                """,
+                (account_id, merchant_id, amt, currency, txn_type, description, json.dumps(meta)),
+            )
+            cur.execute(
+                "UPDATE accounts SET balance = balance + %s WHERE id = %s",
+                (sign * amt, account_id),
+            )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 # ---------- scenarios ----------

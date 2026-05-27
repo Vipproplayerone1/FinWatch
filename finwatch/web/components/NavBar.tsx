@@ -3,14 +3,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 const LINKS = [
-  { href: "/",             label: "Dashboard"      },
-  { href: "/architecture", label: "Architecture"   },
-  { href: "/trace",        label: "Trace"          },
-  { href: "/fraud",        label: "Fraud rules"    },
-  { href: "/accounts",     label: "Accounts"       },
-  { href: "/alerts",       label: "Alerts"         },
-  { href: "/kafka",        label: "Kafka"          },
-  { href: "/demo",         label: "Insert & trace" },
+  { href: "/",         label: "Dashboard"      },
+  { href: "/trace",    label: "Trace"          },
+  { href: "/fraud",    label: "Fraud rules"    },
+  { href: "/accounts", label: "Accounts"       },
+  { href: "/alerts",   label: "Alerts"         },
+  { href: "/kafka",    label: "Kafka"          },
+  { href: "/demo",     label: "Insert & trace" },
 ];
 
 export function NavBar() {

@@ -16,14 +16,13 @@ const fetcher = (u: string) => fetch(u).then((r) => r.json());
 type Stage = "pending" | "active" | "done";
 
 interface StageState {
-  pg: Stage;     pgMs?: number;
-  debe: Stage;   debeMs?: number;
-  kafka: Stage;  kafkaMs?: number;
-  ch: Stage;    chMs?: number;
+  pg: Stage;   pgMs?: number;
+  cdc: Stage;  cdcMs?: number;
+  ch: Stage;   chMs?: number;
 }
 
 const INITIAL_STAGES: StageState = {
-  pg: "pending", debe: "pending", kafka: "pending", ch: "pending",
+  pg: "pending", cdc: "pending", ch: "pending",
 };
 
 function StageRow({ label, sub, state, ms, totalMs }: { label: string; sub: string; state: Stage; ms?: number; totalMs?: number }) {
@@ -86,39 +85,38 @@ export function InsertAndTrace() {
     submittedAt: number,
   ): Promise<{ ok: boolean; totalMs?: number }> {
     const pgMs = Date.now() - submittedAt;
-    setStages({ pg: "done", pgMs, debe: "active", kafka: "pending", ch: "pending" });
+    setStages({ pg: "done", pgMs, cdc: "active", ch: "pending" });
 
     // Poll for the row to appear in ClickHouse. Use the same submittedAt
     // baseline so per-hop "ms" is consistent.
     const deadline = Date.now() + 30_000;
     let appearedAt: number | null = null;
+    let sourceTsMs: number | null = null;
     while (Date.now() < deadline) {
       await new Promise((res) => setTimeout(res, 500));
       try {
         const cr = await fetch(`/api/transactions/${sampleId}`);
         if (cr.ok) {
           const cj = await cr.json();
-          if (cj.found) { appearedAt = Date.now(); break; }
+          if (cj.found) {
+            appearedAt = Date.now();
+            sourceTsMs = Number(cj.txn?.source_ts_ms) || null;
+            break;
+          }
         }
       } catch { /* keep polling */ }
-      // Move the visible stage forward at 800ms / 1600ms heuristics so the
-      // UI looks alive while we wait.
-      const elapsed = Date.now() - submittedAt;
-      setStages((s) => ({
-        ...s,
-        debe:  elapsed >  800 ? "done" : s.debe,
-        debeMs: elapsed > 800 ? Math.min(elapsed, 800) : s.debeMs,
-        kafka: elapsed > 1600 ? "active" : s.kafka,
-      }));
     }
 
     if (appearedAt) {
       const totalMs = appearedAt - submittedAt;
+      // cdcMs is measured from the WAL commit timestamp Debezium stamped onto
+      // the row (CH stores it as _source_ts_ms). Falls back to totalMs if the
+      // row somehow lacks the column.
+      const cdcMs = sourceTsMs ? appearedAt - sourceTsMs : totalMs;
       setStages({
-        pg:   "done", pgMs,
-        debe: "done", debeMs: Math.min(800, totalMs),
-        kafka:"done", kafkaMs: Math.min(1600, totalMs),
-        ch:   "done", chMs: totalMs,
+        pg:  "done", pgMs,
+        cdc: "done", cdcMs,
+        ch:  "done", chMs: totalMs,
       });
       return { ok: true, totalMs };
     }
@@ -132,7 +130,7 @@ export function InsertAndTrace() {
     if (!Number.isFinite(amt) || amt <= 0) { setToast({ kind: "err", msg: "Amount must be > 0" }); return; }
 
     setBusy("insert");
-    setStages({ pg: "active", debe: "pending", kafka: "pending", ch: "pending" });
+    setStages({ pg: "active", cdc: "pending", ch: "pending" });
 
     const submittedAt = Date.now();
     try {
@@ -181,7 +179,7 @@ export function InsertAndTrace() {
   async function runPreset(scenario: string) {
     setBusy(scenario);
     setToast(null);
-    setStages({ pg: "active", debe: "pending", kafka: "pending", ch: "pending" });
+    setStages({ pg: "active", cdc: "pending", ch: "pending" });
     const submittedAt = Date.now();
     try {
       const r = await fetch("/api/scenarios/run", {
@@ -357,10 +355,9 @@ export function InsertAndTrace() {
           <div className="panel p-4">
             <div className="panel-title mb-2">Propagation status</div>
             <div className="space-y-2">
-              <StageRow label="PostgreSQL commit"  sub="Postgres returned id"               state={stages.pg}    ms={stages.pgMs} />
-              <StageRow label="Debezium captured"  sub="estimated read lag ~50 ms"          state={stages.debe}  ms={stages.debeMs} />
-              <StageRow label="Kafka available"    sub="estimated produce + replicate"      state={stages.kafka} ms={stages.kafkaMs} />
-              <StageRow label="ClickHouse visible" sub="measured: row appears via FINAL"    state={stages.ch}    totalMs={stages.chMs} />
+              <StageRow label="PostgreSQL commit"  sub="API round-trip incl. balance check"          state={stages.pg}  ms={stages.pgMs} />
+              <StageRow label="CDC propagation"    sub="Debezium → Kafka → ClickHouse · WAL to row"  state={stages.cdc} ms={stages.cdcMs} />
+              <StageRow label="ClickHouse visible" sub="end-to-end · row queryable via FINAL"        state={stages.ch}  totalMs={stages.chMs} />
             </div>
           </div>
         </div>

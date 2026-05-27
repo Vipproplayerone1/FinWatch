@@ -1,4 +1,4 @@
-import { ArchitectureDiagram } from "@/components/ArchitectureDiagram";
+import { ArchitectureFlow } from "@/components/architecture-flow";
 import { HealthKpis } from "@/components/HealthKpis";
 import { TpsChart } from "@/components/TpsChart";
 import { TransactionStream } from "@/components/TransactionStream";
@@ -27,7 +27,7 @@ export default function Page() {
       </header>
 
       <section className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-        <div className="lg:col-span-2"><ArchitectureDiagram /></div>
+        <div className="lg:col-span-2"><ArchitectureFlow title="Pipeline Flow · live particles" /></div>
         <div><HealthKpis /></div>
       </section>
 

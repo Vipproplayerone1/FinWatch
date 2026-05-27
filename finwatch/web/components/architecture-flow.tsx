@@ -78,9 +78,11 @@ const POLL_MS = 500;
 export function ArchitectureFlow({
   highlightId,
   onNodeClick,
+  title,
 }: {
   highlightId?: string;
   onNodeClick?: (nodeName: string) => void;
+  title?: string;
 }) {
   const [particles, setParticles] = useState<Particle[]>([]);
   const sinceRef = useRef<number>(Date.now() - 5_000);   // start "now - 5s" so we don't replay everything
@@ -157,7 +159,7 @@ export function ArchitectureFlow({
   return (
     <div className="panel p-4">
       <div className="flex items-center justify-between mb-2">
-        <div className="panel-title">PostgreSQL → Debezium → Kafka → ClickHouse · live particles</div>
+        <div className="panel-title">{title ?? "PostgreSQL → Debezium → Kafka → ClickHouse · live particles"}</div>
         <div className="text-xs text-gray-500">
           {particles.length} in flight · cap {MAX_PARTICLES}
         </div>

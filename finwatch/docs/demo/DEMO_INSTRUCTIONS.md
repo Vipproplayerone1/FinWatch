@@ -79,15 +79,14 @@ finwatch-fraud-worker Up X minutes
 
 | Tab | URL | Mục đích trong demo |
 |---|---|---|
-| 1 | http://localhost:3002 | **Web UI chính** — Dashboard, live stream, fraud alerts |
-| 2 | http://localhost:3002/architecture | Sơ đồ kiến trúc động, hiển thị event flow giữa 4 node |
-| 3 | http://localhost:3002/trace | Insert vào Postgres rồi trace event qua từng chặng |
-| 4 | http://localhost:3002/fraud | 6 luật phát hiện fraud (R1–R6) — biểu đồ realtime |
-| 5 | http://localhost:3002/accounts | **Danh bạ tài khoản** — tìm kiếm, balance, status, số alert mở trong 24h |
-| 6 | http://localhost:3002/accounts/[id] | **Trang chi tiết account** — Suspend / Reactivate, txn gần nhất, alert history |
-| 7 | http://localhost:3002/alerts | **Hàng đợi fraud cases** từ bảng `fraud_alerts` với lọc rule + severity |
-| 8 | http://localhost:3002/kafka | Kafka topic browser, partition/offset/consumer lag |
-| 9 | http://localhost:3000 (admin/admin) | Grafana — Pipeline Health dashboard |
+| 1 | http://localhost:3002 | **Web UI chính** — Dashboard với panel **Pipeline Flow** (4 node + particle live), live stream, fraud alerts |
+| 2 | http://localhost:3002/trace | Insert vào Postgres rồi trace event qua từng chặng |
+| 3 | http://localhost:3002/fraud | 6 luật phát hiện fraud (R1–R6) — biểu đồ realtime |
+| 4 | http://localhost:3002/accounts | **Danh bạ tài khoản** — tìm kiếm, balance, status, số alert mở trong 24h |
+| 5 | http://localhost:3002/accounts/[id] | **Trang chi tiết account** — Suspend / Reactivate, txn gần nhất, alert history |
+| 6 | http://localhost:3002/alerts | **Hàng đợi fraud cases** từ bảng `fraud_alerts` với lọc rule + severity |
+| 7 | http://localhost:3002/kafka | Kafka topic browser, partition/offset/consumer lag |
+| 8 | http://localhost:3000 (admin/admin) | Grafana — Pipeline Health dashboard |
 
 Endpoint phụ:
 
@@ -254,7 +253,7 @@ Có thể chạy nhiều lần liên tiếp để TPS spike trong UI.
 
 Người xem sẽ thấy:
 
-1. **Animated architecture flow** ở trên cùng: các "hạt" sáng chạy từ Postgres → Debezium → Kafka → ClickHouse → Web mỗi khi có event.
+1. **Pipeline Flow panel** ở trên cùng: các "hạt" sáng chạy từ Postgres → Debezium → Kafka → ClickHouse mỗi khi có event.
 2. **Health KPIs**: TPS hiện tại, p95 latency, total today.
 3. **TPS sparkline**: nhịp giao dịch theo giây.
 4. **Live transaction stream**: danh sách giao dịch mới nhất, kèm tên account, merchant, category, mức rủi ro (low/medium/high).

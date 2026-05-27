@@ -4,15 +4,20 @@ FinWatch fraud alert worker.
 Runs the six anomaly queries in clickhouse/queries/anomaly_*.sql against
 ClickHouse over HTTP every --interval seconds (default 30) and writes new
 cases into Postgres `fraud_alerts`, deduplicated by (account_id, rule_code)
-within a rolling 1-hour window. The CDC pipeline then carries each new alert
-back into ClickHouse, where the UI reads it.
+within a rolling window (FRAUD_DEDUP_SECONDS, default 3600). The CDC pipeline
+then carries each new alert back into ClickHouse, where the UI reads it.
 
 The detection rules are NOT redefined here -- the anomaly_*.sql files are the
 source of truth. The worker calls each one verbatim and only adds:
   - severity classification per the spec table
   - txn_count / total_amount aggregation per account
   - evidence JSON payload
-  - 1-hour dedup
+  - rolling dedup (env-configurable)
+
+A lightweight HTTP server on FRAUD_TICK_HTTP_PORT (default 5000) exposes
+POST /tick and GET /healthz so the dashboard's DemoControls can force an
+immediate detection pass after firing a scenario, instead of waiting up to
+--interval seconds for the next scheduled tick.
 """
 
 import argparse
@@ -22,8 +27,10 @@ import os
 import re
 import signal
 import sys
+import threading
 import time
 from decimal import Decimal
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import psycopg2
@@ -49,6 +56,9 @@ QUERIES_DIR = Path(__file__).resolve().parent.parent / "clickhouse" / "queries"
 
 LARGE_AMT_CRITICAL_THRESHOLD = Decimal("500000000")  # 500M VND
 ZSCORE_CRITICAL_THRESHOLD = 5.0
+
+DEDUP_SECONDS = int(os.getenv("FRAUD_DEDUP_SECONDS", "3600"))
+TICK_HTTP_PORT = int(os.getenv("FRAUD_TICK_HTTP_PORT", "5000"))
 
 LOG = logging.getLogger("fraud_alert_worker")
 
@@ -284,10 +294,10 @@ def upsert_alerts(conn, rule_code, agg):
                     SELECT 1 FROM fraud_alerts
                     WHERE account_id = %s
                       AND rule_code  = %s
-                      AND created_at > NOW() - INTERVAL '1 hour'
+                      AND created_at > NOW() - make_interval(secs => %s)
                     LIMIT 1
                     """,
-                    (account_id, rule_code),
+                    (account_id, rule_code, DEDUP_SECONDS),
                 )
                 if cur.fetchone():
                     dedup += 1
@@ -322,13 +332,21 @@ def upsert_alerts(conn, rule_code, agg):
 
 # ---------- main loop ----------
 
+# Serializes access to the shared PG connection between the periodic loop
+# and HTTP-triggered ticks (see _serve_http).
+_tick_lock = threading.Lock()
+
+
 def tick(conn, rules):
+    """Run one detection pass. Returns a list of per-rule result dicts."""
+    results = []
     for rule_code, sql, transform in rules:
         start = time.time()
         try:
             rows = ch_query(sql)
         except Exception as e:
             LOG.error("[worker] rule=%s clickhouse error: %s", rule_code, e)
+            results.append({"rule_code": rule_code, "error": "clickhouse"})
             continue
         agg = aggregate_by_account(rows, transform)
         try:
@@ -336,12 +354,80 @@ def tick(conn, rules):
         except Exception as e:
             conn.rollback()
             LOG.error("[worker] rule=%s postgres error: %s", rule_code, e)
+            results.append({"rule_code": rule_code, "error": "postgres"})
             continue
         elapsed_ms = int((time.time() - start) * 1000)
         LOG.info(
             "[worker] rule=%s new=%d dedup=%d skipped=%d elapsed=%dms",
             rule_code, new, dedup, skipped, elapsed_ms,
         )
+        results.append({
+            "rule_code": rule_code,
+            "new": new,
+            "dedup": dedup,
+            "skipped": skipped,
+            "elapsed_ms": elapsed_ms,
+        })
+    return results
+
+
+# ---------- HTTP control plane ----------
+
+# CDC PG->CH usually finishes within ~1s; this lets a scenario insert reach
+# ClickHouse before the next /tick runs the rule queries.
+TICK_CDC_GRACE_SECONDS = 1.5
+
+
+def _make_http_handler(conn, rules):
+    class _Handler(BaseHTTPRequestHandler):
+        def _write_json(self, status, payload):
+            body = json.dumps(payload).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, fmt, *args):
+            LOG.info("[worker:http] " + fmt, *args)
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                self._write_json(200, {"ok": True})
+                return
+            self._write_json(404, {"error": "not found"})
+
+        def do_POST(self):
+            if self.path != "/tick":
+                self._write_json(404, {"error": "not found"})
+                return
+            time.sleep(TICK_CDC_GRACE_SECONDS)
+            try:
+                with _tick_lock:
+                    rule_results = tick(conn, rules)
+            except Exception as e:
+                LOG.exception("[worker:http] tick failed")
+                self._write_json(503, {"error": str(e)})
+                return
+            self._write_json(200, {
+                "rules": rule_results,
+                "dedup_seconds": DEDUP_SECONDS,
+            })
+
+    return _Handler
+
+
+def _serve_http(conn, rules):
+    try:
+        server = ThreadingHTTPServer(("0.0.0.0", TICK_HTTP_PORT),
+                                     _make_http_handler(conn, rules))
+    except OSError as e:
+        LOG.error("[worker] http bind failed on :%d (%s) — periodic loop continues",
+                  TICK_HTTP_PORT, e)
+        return
+    LOG.info("[worker] http server listening on :%d (POST /tick, GET /healthz)",
+             TICK_HTTP_PORT)
+    server.serve_forever()
 
 
 _running = True
@@ -371,6 +457,7 @@ def main():
     rules = load_rules()
     LOG.info("[worker] loaded %d rules from %s", len(rules), QUERIES_DIR)
     LOG.info("[worker] clickhouse=%s database=%s", CH_URL, CH_DATABASE)
+    LOG.info("[worker] dedup window=%ds", DEDUP_SECONDS)
 
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = False
@@ -380,10 +467,16 @@ def main():
 
     try:
         if args.once:
-            tick(conn, rules)
+            with _tick_lock:
+                tick(conn, rules)
             return
+
+        threading.Thread(target=_serve_http, args=(conn, rules),
+                         name="fraud-worker-http", daemon=True).start()
+
         while _running:
-            tick(conn, rules)
+            with _tick_lock:
+                tick(conn, rules)
             for _ in range(args.interval):
                 if not _running:
                     break

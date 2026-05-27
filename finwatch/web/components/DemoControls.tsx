@@ -16,6 +16,20 @@ type ScenarioResult = {
   details: string;
 };
 
+type TickRuleResult = {
+  rule_code: string;
+  new?: number;
+  dedup?: number;
+  skipped?: number;
+  error?: string;
+};
+
+type TickResponse = {
+  rules?: TickRuleResult[];
+  dedup_seconds?: number;
+  error?: string;
+};
+
 type LoadResult = {
   rowsInserted: number;
   tps: number;
@@ -57,10 +71,28 @@ export function DemoControls() {
       const j = (await r.json()) as ScenarioResult & { error?: string };
       if (!r.ok || j.error) {
         setStatus(`Error in ${name}: ${j.error ?? r.statusText}`);
-      } else {
-        setStatus(
-          `OK · ${j.rule} fired · ${j.rowsInserted} rows in ${(j.durationMs / 1000).toFixed(1)}s · ${j.details}`,
-        );
+        return;
+      }
+
+      const base = `OK · ${j.rule} fired · ${j.rowsInserted} rows in ${(j.durationMs / 1000).toFixed(1)}s`;
+      setStatus(`${base} · running detection …`);
+
+      try {
+        const tr = await fetch("/api/fraud/tick", { method: "POST" });
+        const tj = (await tr.json()) as TickResponse;
+        if (!tr.ok || tj.error) {
+          setStatus(`${base} · tick error: ${tj.error ?? tr.statusText}`);
+        } else {
+          const raised = (tj.rules ?? []).reduce((sum, x) => sum + (x.new ?? 0), 0);
+          const deduped = (tj.rules ?? []).reduce((sum, x) => sum + (x.dedup ?? 0), 0);
+          if (raised > 0) {
+            setStatus(`${base} · ${raised} new alert${raised === 1 ? "" : "s"} raised — see /alerts`);
+          } else {
+            setStatus(`${base} · no new alert (deduped=${deduped}; threshold may not be crossed)`);
+          }
+        }
+      } catch (e) {
+        setStatus(`${base} · tick network error: ${(e as Error).message}`);
       }
     } catch (e) {
       setStatus(`Network error running ${name}: ${(e as Error).message}`);

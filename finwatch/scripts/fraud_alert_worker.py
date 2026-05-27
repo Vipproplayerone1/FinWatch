@@ -4,15 +4,19 @@ FinWatch fraud alert worker.
 Runs the six anomaly queries in clickhouse/queries/anomaly_*.sql against
 ClickHouse over HTTP every --interval seconds (default 30) and writes new
 cases into Postgres `fraud_alerts`, deduplicated by (account_id, rule_code)
-within a rolling window (FRAUD_DEDUP_SECONDS, default 3600). The CDC pipeline
-then carries each new alert back into ClickHouse, where the UI reads it.
+within a per-rule rolling window. Each window matches the corresponding
+rule's SQL observation window (see RULE_DEDUP_DEFAULTS), so the same
+underlying anomaly produces one open case while it remains visible to the
+rule. FRAUD_DEDUP_SECONDS, if set, overrides every per-rule default (for
+demo-chaotic runs). The CDC pipeline then carries each new alert back
+into ClickHouse, where the UI reads it.
 
 The detection rules are NOT redefined here -- the anomaly_*.sql files are the
 source of truth. The worker calls each one verbatim and only adds:
   - severity classification per the spec table
   - txn_count / total_amount aggregation per account
   - evidence JSON payload
-  - rolling dedup (env-configurable)
+  - per-rule rolling dedup
 
 A lightweight HTTP server on FRAUD_TICK_HTTP_PORT (default 5000) exposes
 POST /tick and GET /healthz so the dashboard's DemoControls can force an
@@ -57,7 +61,28 @@ QUERIES_DIR = Path(__file__).resolve().parent.parent / "clickhouse" / "queries"
 LARGE_AMT_CRITICAL_THRESHOLD = Decimal("500000000")  # 500M VND
 ZSCORE_CRITICAL_THRESHOLD = 5.0
 
-DEDUP_SECONDS = int(os.getenv("FRAUD_DEDUP_SECONDS", "3600"))
+# Per-rule dedup defaults aligned to each rule's SQL observation window
+# in finwatch/clickhouse/queries/. Same anomaly stays one open case while
+# its underlying state remains visible to the rule.
+RULE_DEDUP_DEFAULTS = {
+    "VELOCITY":   300,   # SQL window 5 min
+    "ZSCORE":     600,   # SQL window 10 min
+    "LARGE_AMT":  3600,  # SQL window 1 hour
+    "HIGH_RISK":  3600,  # SQL window 1 hour
+    "MULTI_CCY":  600,   # SQL window 10 min
+    "FAIL_SPIKE": 1800,  # SQL window 30 min
+}
+# Optional global override: if FRAUD_DEDUP_SECONDS is set, used in place of
+# every per-rule default. Intended for demo-chaotic mode where every press
+# should re-fire fresh alerts; leave unset in production.
+_dedup_env = os.getenv("FRAUD_DEDUP_SECONDS")
+DEDUP_OVERRIDE_SECONDS = int(_dedup_env) if _dedup_env else None
+
+def dedup_seconds_for(rule_code):
+    if DEDUP_OVERRIDE_SECONDS is not None:
+        return DEDUP_OVERRIDE_SECONDS
+    return RULE_DEDUP_DEFAULTS.get(rule_code, 3600)
+
 TICK_HTTP_PORT = int(os.getenv("FRAUD_TICK_HTTP_PORT", "5000"))
 
 LOG = logging.getLogger("fraud_alert_worker")
@@ -297,7 +322,7 @@ def upsert_alerts(conn, rule_code, agg):
                       AND created_at > NOW() - make_interval(secs => %s)
                     LIMIT 1
                     """,
-                    (account_id, rule_code, DEDUP_SECONDS),
+                    (account_id, rule_code, dedup_seconds_for(rule_code)),
                 )
                 if cur.fetchone():
                     dedup += 1
@@ -411,7 +436,8 @@ def _make_http_handler(conn, rules):
                 return
             self._write_json(200, {
                 "rules": rule_results,
-                "dedup_seconds": DEDUP_SECONDS,
+                "dedup_seconds": {r: dedup_seconds_for(r) for r in RULE_DEDUP_DEFAULTS},
+                "dedup_override": DEDUP_OVERRIDE_SECONDS,
             })
 
     return _Handler
@@ -457,7 +483,10 @@ def main():
     rules = load_rules()
     LOG.info("[worker] loaded %d rules from %s", len(rules), QUERIES_DIR)
     LOG.info("[worker] clickhouse=%s database=%s", CH_URL, CH_DATABASE)
-    LOG.info("[worker] dedup window=%ds", DEDUP_SECONDS)
+    dedup_summary = " ".join(f"{r}={dedup_seconds_for(r)}s" for r in RULE_DEDUP_DEFAULTS)
+    LOG.info("[worker] dedup defaults: %s (override=%s)",
+             dedup_summary,
+             f"{DEDUP_OVERRIDE_SECONDS}s" if DEDUP_OVERRIDE_SECONDS is not None else "None")
 
     conn = psycopg2.connect(**DB_CONFIG)
     conn.autocommit = False

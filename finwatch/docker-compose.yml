@@ -172,10 +172,13 @@ services:
 
   # ============================================
   # Fraud Alert Worker — runs the six anomaly queries against ClickHouse
-  # every 30s and writes new cases into Postgres fraud_alerts. Dedup window
-  # is FRAUD_DEDUP_SECONDS (60s for demo; raise to 3600+ for production).
-  # Also exposes POST /tick on :5000 so the dashboard can force an immediate
-  # detection pass. CDC carries the rows back into ClickHouse for the UI.
+  # every 30s and writes new cases into Postgres fraud_alerts. Dedup runs
+  # per rule, each window aligned to that rule's SQL observation window
+  # (see RULE_DEDUP_DEFAULTS in fraud_alert_worker.py). Set
+  # FRAUD_DEDUP_SECONDS to override every default with a single value
+  # (demo-chaotic mode). Also exposes POST /tick on :5000 so the dashboard
+  # can force an immediate detection pass. CDC carries the rows back into
+  # ClickHouse for the UI.
   # ============================================
   fraud-worker:
     image: python:3.11-slim
@@ -194,7 +197,6 @@ services:
       CLICKHOUSE_USER: ${CLICKHOUSE_USER}
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DATABASE: ${CLICKHOUSE_DB}
-      FRAUD_DEDUP_SECONDS: "60"
       FRAUD_TICK_HTTP_PORT: "5000"
       PYTHONUNBUFFERED: "1"
     command: >

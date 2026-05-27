@@ -2,6 +2,7 @@
 import { useState } from "react";
 import useSWR from "swr";
 import Link from "next/link";
+import { SeverityBadge, RuleBadge } from "@/components/badges";
 
 type Account = {
   id: string;
@@ -55,26 +56,6 @@ function StatusBadge({ status }: { status: string }) {
   :                          "text-gray-300       bg-gray-500/10";
   return (
     <span className={`px-2 py-0.5 rounded text-xs uppercase font-medium ${cls}`}>{status}</span>
-  );
-}
-
-function SeverityBadge({ severity }: { severity: string }) {
-  const cls =
-    severity === "critical" ? "text-red-300    bg-red-500/15"
-  : severity === "high"     ? "text-accent-danger bg-accent-danger/10"
-  : severity === "medium"   ? "text-accent-warn   bg-accent-warn/10"
-  : severity === "low"      ? "text-gray-300      bg-gray-500/10"
-  :                            "text-gray-300      bg-gray-500/10";
-  return (
-    <span className={`px-2 py-0.5 rounded text-[10px] uppercase font-medium ${cls}`}>{severity}</span>
-  );
-}
-
-function RuleBadge({ rule }: { rule: string }) {
-  return (
-    <span className="px-2 py-0.5 rounded text-[10px] uppercase font-mono bg-bg-ring/40 text-gray-200">
-      {rule}
-    </span>
   );
 }
 

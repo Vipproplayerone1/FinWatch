@@ -218,7 +218,7 @@ export function ArchitectureFlow({
               className="cursor-pointer"
               onClick={() => onNodeClick?.(n.key)}
             >
-              <circle r={NODE_R} fill="#0c1220" />
+              <circle r={NODE_R} fill="#0c1220" stroke="#22d3ee" strokeWidth="2" />
               <text textAnchor="middle" y={4} fontSize="14" fontWeight="600" fill="#e5e7eb">
                 {n.short}
               </text>

@@ -44,9 +44,6 @@ export function ArchitectureDiagram() {
               cy={Y}
               r={R}
               fill="#121826"
-              stroke="#22d3ee"
-              strokeWidth="2"
-              className="animate-pulseDot"
             />
             <text x={n.x} y={Y + 5} textAnchor="middle" fontSize="11" fill="#e5e7eb">
               {n.label.slice(0, 2).toUpperCase()}

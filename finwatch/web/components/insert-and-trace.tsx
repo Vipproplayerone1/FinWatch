@@ -81,6 +81,50 @@ export function InsertAndTrace() {
     if (merchantsData?.merchants?.[0] && !merchantId) setMerchantId(merchantsData.merchants[0].id);
   }, [merchantsData, merchantId]);
 
+  async function trackPropagation(
+    sampleId: string,
+    submittedAt: number,
+  ): Promise<{ ok: boolean; totalMs?: number }> {
+    const pgMs = Date.now() - submittedAt;
+    setStages({ pg: "done", pgMs, debe: "active", kafka: "pending", ch: "pending" });
+
+    // Poll for the row to appear in ClickHouse. Use the same submittedAt
+    // baseline so per-hop "ms" is consistent.
+    const deadline = Date.now() + 30_000;
+    let appearedAt: number | null = null;
+    while (Date.now() < deadline) {
+      await new Promise((res) => setTimeout(res, 500));
+      try {
+        const cr = await fetch(`/api/transactions/${sampleId}`);
+        if (cr.ok) {
+          const cj = await cr.json();
+          if (cj.found) { appearedAt = Date.now(); break; }
+        }
+      } catch { /* keep polling */ }
+      // Move the visible stage forward at 800ms / 1600ms heuristics so the
+      // UI looks alive while we wait.
+      const elapsed = Date.now() - submittedAt;
+      setStages((s) => ({
+        ...s,
+        debe:  elapsed >  800 ? "done" : s.debe,
+        debeMs: elapsed > 800 ? Math.min(elapsed, 800) : s.debeMs,
+        kafka: elapsed > 1600 ? "active" : s.kafka,
+      }));
+    }
+
+    if (appearedAt) {
+      const totalMs = appearedAt - submittedAt;
+      setStages({
+        pg:   "done", pgMs,
+        debe: "done", debeMs: Math.min(800, totalMs),
+        kafka:"done", kafkaMs: Math.min(1600, totalMs),
+        ch:   "done", chMs: totalMs,
+      });
+      return { ok: true, totalMs };
+    }
+    return { ok: false };
+  }
+
   async function submitInsert() {
     setToast(null);
     if (!accountId || !merchantId) { setToast({ kind: "err", msg: "Pick account and merchant" }); return; }
@@ -108,8 +152,6 @@ export function InsertAndTrace() {
         return;
       }
       setLastId(id);
-      const pgMs = Date.now() - submittedAt;
-      setStages({ pg: "done", pgMs, debe: "active", kafka: "pending", ch: "pending" });
 
       // The ledger may have rejected the txn (status='failed' with a reason).
       // The row still exists in PG and will propagate to CH, so we keep tracing,
@@ -122,38 +164,8 @@ export function InsertAndTrace() {
           : `Inserted ${id.slice(0, 8)}… — waiting for CDC`;
       setToast({ kind: j.accepted === false ? "err" : "ok", msg: headline });
 
-      // Poll for the row to appear in ClickHouse. Use the same submittedAt
-      // baseline so per-hop "ms" is consistent.
-      const deadline = Date.now() + 30_000;
-      let appearedAt: number | null = null;
-      while (Date.now() < deadline) {
-        await new Promise((res) => setTimeout(res, 500));
-        try {
-          const cr = await fetch(`/api/transactions/${id}`);
-          if (cr.ok) {
-            const cj = await cr.json();
-            if (cj.found) { appearedAt = Date.now(); break; }
-          }
-        } catch { /* keep polling */ }
-        // Move the visible stage forward at 800ms / 1600ms heuristics so the
-        // UI looks alive while we wait.
-        const elapsed = Date.now() - submittedAt;
-        setStages((s) => ({
-          ...s,
-          debe:  elapsed >  800 ? "done" : s.debe,
-          debeMs: elapsed > 800 ? Math.min(elapsed, 800) : s.debeMs,
-          kafka: elapsed > 1600 ? "active" : s.kafka,
-        }));
-      }
-
-      if (appearedAt) {
-        const totalMs = appearedAt - submittedAt;
-        setStages({
-          pg:   "done", pgMs,
-          debe: "done", debeMs: Math.min(800, totalMs),
-          kafka:"done", kafkaMs: Math.min(1600, totalMs),
-          ch:   "done", chMs: totalMs,
-        });
+      const { ok, totalMs } = await trackPropagation(id, submittedAt);
+      if (ok) {
         setToast({ kind: "ok", msg: `Visible in ClickHouse in ${totalMs} ms` });
       } else {
         setToast({ kind: "err", msg: "Row never appeared in ClickHouse within 30 s — check connector" });
@@ -169,6 +181,8 @@ export function InsertAndTrace() {
   async function runPreset(scenario: string) {
     setBusy(scenario);
     setToast(null);
+    setStages({ pg: "active", debe: "pending", kafka: "pending", ch: "pending" });
+    const submittedAt = Date.now();
     try {
       const r = await fetch("/api/scenarios/run", {
         method: "POST",
@@ -176,10 +190,30 @@ export function InsertAndTrace() {
         body: JSON.stringify({ scenario }),
       });
       const j = await r.json();
-      if (!r.ok) setToast({ kind: "err", msg: j.error ?? r.statusText });
-      else setToast({ kind: "ok", msg: `${j.rule} fired · ${j.rowsInserted} rows in ${(j.durationMs/1000).toFixed(1)}s` });
+      if (!r.ok) {
+        setToast({ kind: "err", msg: j.error ?? r.statusText });
+        setStages(INITIAL_STAGES);
+        return;
+      }
+
+      const sampleId: string | undefined = j.sampleTxnId;
+      const summary = `${j.rule} fired · ${j.rowsInserted} rows`;
+      if (!sampleId) {
+        // Defensive fallback if the API didn't surface a sample id.
+        setToast({ kind: "ok", msg: `${summary} in ${(j.durationMs / 1000).toFixed(1)}s` });
+        setStages(INITIAL_STAGES);
+        return;
+      }
+
+      const { ok, totalMs } = await trackPropagation(sampleId, submittedAt);
+      if (ok) {
+        setToast({ kind: "ok", msg: `${summary} · sample visible in CH in ${totalMs} ms` });
+      } else {
+        setToast({ kind: "err", msg: `${summary} · sample never appeared in ClickHouse within 30 s — check connector` });
+      }
     } catch (e) {
       setToast({ kind: "err", msg: (e as Error).message });
+      setStages(INITIAL_STAGES);
     } finally {
       setBusy(null);
     }

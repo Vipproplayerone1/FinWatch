@@ -118,13 +118,16 @@ const insertTxn = async (
   status: string,
   description: string,
   meta: Record<string, unknown>,
-) =>
-  pg.query(
+): Promise<string> => {
+  const res = await pg.query<{ id: string }>(
     `INSERT INTO transactions
        (account_id, merchant_id, amount, currency, type, status, description, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING id`,
     [accountId, merchantId, amount, currency, txnType, status, description, meta],
   );
+  return res.rows[0]!.id;
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -138,19 +141,22 @@ export interface ScenarioResult {
   rowsInserted: number;
   details: string;
   durationMs: number;
+  sampleTxnId?: string;    // id of the first inserted row, for stage tracking
 }
 
 async function runCardCloning(count = 15): Promise<ScenarioResult> {
   const t0 = Date.now();
   const ids = await pickIds();
+  let sampleTxnId: string | undefined;
   for (let i = 0; i < count; i++) {
-    await insertTxn(
+    const id = await insertTxn(
       ids.accountId, ids.merchantId,
       randRange(800_000, 4_500_000),
       "VND", "purchase", "completed",
       `card-cloning #${i + 1}`,
       { fraud_type: "card_cloning", sequence: i + 1 },
     );
+    if (i === 0) sampleTxnId = id;
     await sleep(150);
   }
   return {
@@ -158,13 +164,14 @@ async function runCardCloning(count = 15): Promise<ScenarioResult> {
     story: SCENARIOS[0].story, victim: ids.accountId, rowsInserted: count,
     details: `${count} rapid micro-purchases (target: VELOCITY rule)`,
     durationMs: Date.now() - t0,
+    sampleTxnId,
   };
 }
 
 async function runWireFraud(amount = 250_000_000): Promise<ScenarioResult> {
   const t0 = Date.now();
   const ids = await pickIds();
-  await insertTxn(
+  const sampleTxnId = await insertTxn(
     ids.accountId, ids.merchantId,
     amount, "VND", "transfer", "completed",
     "wire-fraud (BEC)",
@@ -175,6 +182,7 @@ async function runWireFraud(amount = 250_000_000): Promise<ScenarioResult> {
     story: SCENARIOS[1].story, victim: ids.accountId, rowsInserted: 1,
     details: `single ${amount.toLocaleString()} VND wire to ${ids.merchantName} (target: LARGE_AMT)`,
     durationMs: Date.now() - t0,
+    sampleTxnId,
   };
 }
 
@@ -182,14 +190,16 @@ async function runFxLaundering(): Promise<ScenarioResult> {
   const t0 = Date.now();
   const ids = await pickIds();
   const currencies = ["VND", "USD", "EUR", "JPY", "THB"];
+  let sampleTxnId: string | undefined;
   for (let i = 0; i < currencies.length; i++) {
-    await insertTxn(
+    const id = await insertTxn(
       ids.accountId, ids.merchantId,
       randRange(500_000, 8_000_000),
       currencies[i]!, "purchase", "completed",
       `fx-laundering hop ${i + 1}/${currencies.length}`,
       { fraud_type: "fx_laundering", currency: currencies[i] },
     );
+    if (i === 0) sampleTxnId = id;
     await sleep(300);
   }
   return {
@@ -197,6 +207,7 @@ async function runFxLaundering(): Promise<ScenarioResult> {
     story: SCENARIOS[2].story, victim: ids.accountId, rowsInserted: currencies.length,
     details: `${currencies.length} currencies (${currencies.join(", ")}) (target: MULTI_CCY)`,
     durationMs: Date.now() - t0,
+    sampleTxnId,
   };
 }
 
@@ -206,14 +217,16 @@ async function runAccountTakeover(): Promise<ScenarioResult> {
   const baselineN = 20;
   const baselineMean = 120_000;
   const outlier = 350_000_000;
+  let sampleTxnId: string | undefined;
   for (let i = 0; i < baselineN; i++) {
-    await insertTxn(
+    const id = await insertTxn(
       ids.accountId, ids.merchantId,
       baselineMean + randRange(-15_000, 15_000),
       "VND", "purchase", "completed",
       `ato-baseline ${i + 1}`,
       { fraud_type: "account_takeover_baseline" },
     );
+    if (i === 0) sampleTxnId = id;
   }
   await insertTxn(
     ids.accountId, ids.merchantId,
@@ -226,20 +239,23 @@ async function runAccountTakeover(): Promise<ScenarioResult> {
     story: SCENARIOS[3].story, victim: ids.accountId, rowsInserted: baselineN + 1,
     details: `${baselineN} baseline + 1 outlier (${outlier.toLocaleString()} VND) (target: ZSCORE)`,
     durationMs: Date.now() - t0,
+    sampleTxnId,
   };
 }
 
 async function runMuleAccount(count = 4): Promise<ScenarioResult> {
   const t0 = Date.now();
   const ids = await pickIds("high");
+  let sampleTxnId: string | undefined;
   for (let i = 0; i < count; i++) {
-    await insertTxn(
+    const id = await insertTxn(
       ids.accountId, ids.merchantId,
       randRange(3_000_000, 12_000_000),
       "VND", "transfer", "completed",
       `mule routing ${i + 1}/${count}`,
       { fraud_type: "mule_account" },
     );
+    if (i === 0) sampleTxnId = id;
     await sleep(200);
   }
   return {
@@ -247,20 +263,23 @@ async function runMuleAccount(count = 4): Promise<ScenarioResult> {
     story: SCENARIOS[4].story, victim: ids.accountId, rowsInserted: count,
     details: `${count} routings via ${ids.merchantName} (risk_level=high) (target: HIGH_RISK)`,
     durationMs: Date.now() - t0,
+    sampleTxnId,
   };
 }
 
 async function runCardTesting(failedN = 6, completedN = 1): Promise<ScenarioResult> {
   const t0 = Date.now();
   const ids = await pickIds();
+  let sampleTxnId: string | undefined;
   for (let i = 0; i < failedN; i++) {
-    await insertTxn(
+    const id = await insertTxn(
       ids.accountId, ids.merchantId,
       randRange(50_000, 500_000),
       "VND", "purchase", "failed",
       `card-testing fail #${i + 1}`,
       { fraud_type: "card_testing", outcome: "failed" },
     );
+    if (i === 0) sampleTxnId = id;
     await sleep(100);
   }
   for (let i = 0; i < completedN; i++) {
@@ -279,6 +298,7 @@ async function runCardTesting(failedN = 6, completedN = 1): Promise<ScenarioResu
     rowsInserted: failedN + completedN,
     details: `${failedN} failed + ${completedN} completed (target: FAIL_SPIKE)`,
     durationMs: Date.now() - t0,
+    sampleTxnId,
   };
 }
 

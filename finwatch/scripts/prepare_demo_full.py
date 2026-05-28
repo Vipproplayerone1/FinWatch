@@ -453,11 +453,14 @@ def drive_load(count: int, tps: int) -> None:
         info("Skipping load (count=0)")
         return
     info(f"Generating {count} synthetic transactions @ ~{tps} TPS")
-    run([
+    cmd = [
         PYTHON, str(SCRIPT_DIR / "generate_transactions.py"),
         "--count", str(count),
         "--tps", str(tps),
-    ])
+    ]
+    if os.environ.get("LOAD_EXCLUDE_HIGH_RISK") == "1":
+        cmd.append("--exclude-high-risk")
+    run(cmd)
     ok("Load generation complete")
 
 
@@ -634,11 +637,15 @@ def verify_per_rule() -> tuple[int, list[str]]:
 def print_banner(api_pass: int, api_total: int,
                  rules_firing: int, empty_rules: list[str],
                  fraud_results: dict[str, str],
-                 exit_code: int) -> None:
+                 exit_code: int,
+                 for_defense: bool = False) -> None:
     line = "=" * 76
     print("\n" + line)
     if exit_code == 0:
-        title = "FinWatch is READY for COMPREHENSIVE DEMO"
+        if for_defense:
+            title = "FinWatch is READY FOR LIVE DEFENSE DEMO (clean state)"
+        else:
+            title = "FinWatch is READY for COMPREHENSIVE DEMO"
     elif exit_code == 2:
         title = "FinWatch is ready WITH WARNINGS"
     else:
@@ -680,6 +687,8 @@ def print_banner(api_pass: int, api_total: int,
 
     print("\n  Recommended demo flow: see")
     print("    finwatch/docs/demo/DEMO_INSTRUCTIONS_UI.md")
+    if for_defense and exit_code == 0:
+        print("\n  Tip: click scenario buttons during the demo to populate alerts live.")
     print("\n" + line + "\n")
 
 
@@ -710,11 +719,17 @@ def parse_args() -> argparse.Namespace:
                    help="Skip UI page pre-warm.")
     p.add_argument("--evidence", action="store_true",
                    help="Also run scripts/collect_evidence.py at the end.")
+    p.add_argument("--for-defense", action="store_true",
+                   help="Prepare a clean state for live demo: no fraud injection, "
+                        "no worker tick, normal load uses low/medium-risk merchants only.")
     return p.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.for_defense:
+        args.no_fraud = True
+        os.environ["LOAD_EXCLUDE_HIGH_RISK"] = "1"
     t0 = time.time()
 
     print("FinWatch - comprehensive demo preparation")
@@ -801,7 +816,10 @@ def main() -> None:
 
     # 12. NEW Per-rule verification
     with Stage(12, 14, "Per-rule R1-R6 verification (NEW)"):
-        if args.no_fraud:
+        if args.for_defense:
+            info("Per-rule verification skipped - defense mode (clean state expected).")
+            rules_firing, empty_rules = 6, []
+        elif args.no_fraud:
             info("Skipping per-rule check (--no-fraud was set)")
             rules_firing, empty_rules = 6, []
         else:
@@ -828,7 +846,7 @@ def main() -> None:
         else:
             exit_code = 0
         print_banner(api_pass, api_total, rules_firing, empty_rules,
-                     fraud_results, exit_code)
+                     fraud_results, exit_code, for_defense=args.for_defense)
 
     dt = time.time() - t0
     print(f"Total elapsed: {dt:.1f}s")

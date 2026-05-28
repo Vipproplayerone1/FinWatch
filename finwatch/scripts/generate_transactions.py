@@ -52,13 +52,19 @@ def get_connection():
     return conn
 
 
-def load_ids(conn):
+def load_ids(conn, exclude_high_risk: bool = False):
     """Load all account and merchant IDs (active and otherwise)."""
     with conn.cursor() as cur:
         cur.execute("SELECT id FROM accounts")
         account_ids = [row[0] for row in cur.fetchall()]
 
-        cur.execute("SELECT id, risk_level FROM merchants")
+        if exclude_high_risk:
+            cur.execute(
+                "SELECT id, risk_level FROM merchants "
+                "WHERE risk_level IN ('low', 'medium')"
+            )
+        else:
+            cur.execute("SELECT id, risk_level FROM merchants")
         merchants = [(row[0], row[1]) for row in cur.fetchall()]
 
     conn.commit()
@@ -165,10 +171,12 @@ def main():
     parser = argparse.ArgumentParser(description="FinWatch Transaction Generator")
     parser.add_argument("--count", type=int, default=1000, help="Total transactions")
     parser.add_argument("--tps", type=int, default=100, help="Transactions per second")
+    parser.add_argument("--exclude-high-risk", action="store_true",
+                        help="Exclude high-risk merchants (keep only low/medium).")
     args = parser.parse_args()
 
     conn = get_connection()
-    account_ids, merchants = load_ids(conn)
+    account_ids, merchants = load_ids(conn, exclude_high_risk=args.exclude_high_risk)
 
     print(f"Generating {args.count} transactions at ~{args.tps} TPS")
     print(f"   Accounts: {len(account_ids)}, Merchants: {len(merchants)}")

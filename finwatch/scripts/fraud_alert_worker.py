@@ -40,6 +40,9 @@ from pathlib import Path
 import psycopg2
 import psycopg2.extras
 import requests
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 # ---------- configuration ----------
 

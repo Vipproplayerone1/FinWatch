@@ -45,7 +45,7 @@ DB_CONFIG = {
     "port": int(os.getenv("POSTGRES_PORT", 5432)),
     "dbname": os.getenv("POSTGRES_DB", "finwatch"),
     "user": os.getenv("POSTGRES_USER", "finwatch"),
-    "password": os.getenv("POSTGRES_PASSWORD", "finwatch_secret_2024"),
+    "password": os.environ["POSTGRES_PASSWORD"],
 }
 
 CLICKHOUSE_URL = "http://localhost:8123"
@@ -342,10 +342,52 @@ def wait_for_cdc(eval_account_ids: list[str], expected_count: int,
     return last
 
 
+def split_sql_statements(sql: str) -> list[str]:
+    """Split a SQL string on `;` terminators, ignoring `;` inside `--` line
+    comments and `/* ... */` block comments. Returns non-empty trimmed
+    statements; comment-only chunks (no SELECT after stripping) are dropped.
+    """
+    out: list[str] = []
+    current: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        c = sql[i]
+        if c == "-" and i + 1 < n and sql[i + 1] == "-":
+            while i < n and sql[i] != "\n":
+                current.append(sql[i])
+                i += 1
+        elif c == "/" and i + 1 < n and sql[i + 1] == "*":
+            current.append(sql[i]); current.append(sql[i + 1])
+            i += 2
+            while i + 1 < n and not (sql[i] == "*" and sql[i + 1] == "/"):
+                current.append(sql[i])
+                i += 1
+            if i + 1 < n:
+                current.append(sql[i]); current.append(sql[i + 1])
+                i += 2
+        elif c == ";":
+            stmt = "".join(current).strip()
+            if stmt and any(
+                ln.strip() and not ln.strip().startswith("--")
+                for ln in stmt.splitlines()
+            ):
+                out.append(stmt)
+            current = []
+            i += 1
+        else:
+            current.append(c)
+            i += 1
+    final = "".join(current).strip()
+    if final and any(
+        ln.strip() and not ln.strip().startswith("--") for ln in final.splitlines()
+    ):
+        out.append(final)
+    return out
+
+
 def load_rule_statements(queries_dir: Path) -> dict[str, str]:
     """Read each rule's source SQL and return {rule_name: SELECT body}.
-    Splits multi-statement files on `;` (none of the queries contain `;` in
-    string literals), drops comment-only chunks, maps positionally.
+    Maps positionally via RULE_SOURCES.
     """
     file_cache: dict[str, list[str]] = {}
     out: dict[str, str] = {}
@@ -353,15 +395,7 @@ def load_rule_statements(queries_dir: Path) -> dict[str, str]:
     for rule, (filename, idx) in RULE_SOURCES.items():
         if filename not in file_cache:
             content = (queries_dir / filename).read_text(encoding="utf-8")
-            statements: list[str] = []
-            for chunk in content.split(";"):
-                has_real_line = any(
-                    ln.strip() and not ln.strip().startswith("--")
-                    for ln in chunk.splitlines()
-                )
-                if has_real_line:
-                    statements.append(chunk.strip())
-            file_cache[filename] = statements
+            file_cache[filename] = split_sql_statements(content)
 
         statements = file_cache[filename]
         if idx >= len(statements):

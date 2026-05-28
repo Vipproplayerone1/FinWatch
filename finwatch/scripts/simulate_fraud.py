@@ -38,7 +38,7 @@ DB_CONFIG = {
     "port": int(os.getenv("POSTGRES_PORT", 5432)),
     "dbname": os.getenv("POSTGRES_DB", "finwatch"),
     "user": os.getenv("POSTGRES_USER", "finwatch"),
-    "password": os.getenv("POSTGRES_PASSWORD", "finwatch_secret_2024"),
+    "password": os.environ["POSTGRES_PASSWORD"],
 }
 
 

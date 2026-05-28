@@ -66,12 +66,18 @@ def main():
     args = parser.parse_args()
 
     pg_conn = psycopg2.connect(
-        host="localhost", port=5432, dbname="finwatch",
-        user="finwatch", password="finwatch_secret_2024"
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", 5432)),
+        dbname=os.getenv("POSTGRES_DB", "finwatch"),
+        user=os.getenv("POSTGRES_USER", "finwatch"),
+        password=os.environ["POSTGRES_PASSWORD"],
     )
     ch_client = clickhouse_connect.get_client(
-        host="localhost", port=8123, database="finwatch",
-        username="default", password="clickhouse_secret_2024"
+        host=os.getenv("CLICKHOUSE_HOST", "localhost"),
+        port=int(os.getenv("CLICKHOUSE_HTTP_PORT", 8123)),
+        database=os.getenv("CLICKHOUSE_DB", "finwatch"),
+        username=os.getenv("CLICKHOUSE_USER", "default"),
+        password=os.environ["CLICKHOUSE_PASSWORD"],
     )
 
     print(f"Measuring end-to-end latency ({args.samples} samples)...\n")

@@ -67,8 +67,11 @@ def main():
     args = parser.parse_args()
 
     conn = psycopg2.connect(
-        host="localhost", port=5432, dbname="finwatch",
-        user="finwatch", password="finwatch_secret_2024"
+        host=os.getenv("POSTGRES_HOST", "localhost"),
+        port=int(os.getenv("POSTGRES_PORT", 5432)),
+        dbname=os.getenv("POSTGRES_DB", "finwatch"),
+        user=os.getenv("POSTGRES_USER", "finwatch"),
+        password=os.environ["POSTGRES_PASSWORD"],
     )
 
     run_throughput_test(conn, args.total, args.batch_size)

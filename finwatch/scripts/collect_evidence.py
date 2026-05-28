@@ -26,21 +26,24 @@ from pathlib import Path
 import clickhouse_connect
 import psycopg2
 import requests
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 
 DB_CONFIG = {
-    "host": "localhost",
-    "port": 5432,
-    "dbname": "finwatch",
-    "user": "finwatch",
-    "password": "finwatch_secret_2024",
+    "host": os.getenv("POSTGRES_HOST", "localhost"),
+    "port": int(os.getenv("POSTGRES_PORT", 5432)),
+    "dbname": os.getenv("POSTGRES_DB", "finwatch"),
+    "user": os.getenv("POSTGRES_USER", "finwatch"),
+    "password": os.environ["POSTGRES_PASSWORD"],
 }
 CH_CONFIG = {
-    "host": "localhost",
-    "port": 8123,
-    "database": "finwatch",
-    "username": "default",
-    "password": "clickhouse_secret_2024",
+    "host": os.getenv("CLICKHOUSE_HOST", "localhost"),
+    "port": int(os.getenv("CLICKHOUSE_HTTP_PORT", 8123)),
+    "database": os.getenv("CLICKHOUSE_DB", "finwatch"),
+    "username": os.getenv("CLICKHOUSE_USER", "default"),
+    "password": os.environ["CLICKHOUSE_PASSWORD"],
 }
 
 PYTHON_EXE = sys.executable

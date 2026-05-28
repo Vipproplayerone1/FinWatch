@@ -31,6 +31,38 @@ conda activate C:\ProgramData\miniconda3\envs\graduate_env
 pip install -r finwatch/scripts/requirements.txt
 ```
 
+### Chuẩn bị clean state cho buổi defense
+
+Trước buổi bảo vệ, dùng `--for-defense` để stack khởi động ở trạng thái **không có alert nào sẵn**, để khi hội đồng mở `/alerts` thấy queue trống → click scenario → alert hiện ra live (~1 s).
+
+```powershell
+python finwatch\scripts\prepare_demo_full.py --start --for-defense
+```
+
+Cờ `--for-defense` làm:
+
+- Boot stack + đợi healthcheck (stages 1–5)
+- Seed 30 ngày baseline cho ZSCORE history (stage 6)
+- Drive normal load nhưng **loại high-risk merchant** → không phát sinh HIGH_RISK / ZSCORE / VELOCITY false positive
+- **Skip** inject 6 kịch bản fraud (stage 8)
+- **Skip** tick fraud_alert_worker (stage 10) → `fraud_alerts` trống
+- Skip per-rule count>0 verification — clean state là kỳ vọng
+
+Kết quả: dashboard render, TPS chart có data, `/alerts` rỗng, 6 fraud rule cards đều `count=0`. Trong demo bạn click scenario buttons live, hội đồng thấy alert đi từ 0 lên 1 real time.
+
+Verify trước khi bắt đầu demo:
+
+```powershell
+docker exec finwatch-postgres psql -U finwatch -d finwatch -c "SELECT count(*) FROM fraud_alerts"
+# expect: 0
+```
+
+Nếu chỉ muốn "tour mode" (mọi widget đã có data sẵn, demo dạng dạo cảnh), chạy không kèm cờ:
+
+```powershell
+python finwatch\scripts\prepare_demo_full.py --start
+```
+
 ---
 
 ## 1. Khởi động toàn bộ stack
@@ -233,6 +265,8 @@ Phải có cùng số dòng — bằng chứng case đã chảy qua Debezium →
 ---
 
 ## 4. Kịch bản demo chính (gợi ý 10 phút)
+
+> **Defense mode (clean state):** trước buổi demo, chạy `python finwatch\scripts\prepare_demo_full.py --start --for-defense` (xem mục 0). Sau đó mở http://localhost:3002 là demo được ngay — bỏ qua "Bước 1 sinh tải nền" bên dưới vì stack đã có load nền. Bước "Bước 1" chỉ cần khi bạn không dùng `prepare_demo_full.py`.
 
 ### Bước 1 — Sinh tải nền (background)
 
@@ -511,6 +545,10 @@ docker compose logs --tail 200 <service>          # đọc log
 docker compose restart <service>                  # restart 1 service
 docker compose down -v && docker compose up -d    # nuke + làm lại
 ```
+
+### Tại sao `/alerts` đã có rows trước khi click gì?
+
+Có thể bạn chạy `prepare_demo_full.py` **không kèm** `--for-defense` — chế độ mặc định sẽ tự bắn cả 6 kịch bản fraud và tick worker, nên `/alerts` đã có case trước khi demo bắt đầu. Chạy lại với `--for-defense` để có clean state cho live demo.
 
 ---
 

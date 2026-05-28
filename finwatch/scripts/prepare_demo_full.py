@@ -351,13 +351,11 @@ def verify_snapshot(timeout: int = 60) -> None:
 TRANSACTION_TYPES = ["purchase", "transfer", "withdrawal", "deposit", "refund"]
 TYPE_WEIGHTS = [0.45, 0.25, 0.15, 0.10, 0.05]
 STATUS_OPTIONS = ["completed", "completed", "completed", "pending", "failed"]
-AMOUNT_RANGES = {
-    "purchase":   (10_000, 5_000_000),
-    "transfer":   (50_000, 50_000_000),
-    "withdrawal": (100_000, 10_000_000),
-    "deposit":    (100_000, 100_000_000),
-    "refund":     (10_000, 5_000_000),
-}
+
+# Reuse the log-normal amount logic from generate_transactions.py so baseline
+# and live load share the same distribution shape.
+sys.path.insert(0, str(SCRIPT_DIR))
+from generate_transactions import synthetic_amount  # noqa: E402
 
 
 def seed_baseline(days: int = 30,
@@ -394,8 +392,7 @@ def seed_baseline(days: int = 30,
             n = random.randint(min_per_account, max_per_account)
             for _ in range(n):
                 txn_type = random.choices(TRANSACTION_TYPES, weights=TYPE_WEIGHTS, k=1)[0]
-                lo, hi = AMOUNT_RANGES[txn_type]
-                amount = round(random.uniform(lo, hi), 2)
+                amount = synthetic_amount(txn_type)
                 merchant_id, _risk = random.choice(merchants)
                 # Spread uniformly across the window with a random
                 # intra-day offset.

@@ -36,14 +36,33 @@ TRANSACTION_TYPES = ["purchase", "transfer", "withdrawal", "deposit", "refund"]
 TYPE_WEIGHTS = [0.45, 0.25, 0.15, 0.10, 0.05]
 DEBIT_TYPES = {"purchase", "transfer", "withdrawal"}
 
-# Amount ranges in VND
-AMOUNT_RANGES = {
-    "purchase": (10_000, 5_000_000),
-    "transfer": (50_000, 50_000_000),
-    "withdrawal": (100_000, 10_000_000),
-    "deposit": (100_000, 100_000_000),
-    "refund": (10_000, 5_000_000),
+# Log-normal amount distribution per transaction type, in VND. Each entry
+# is (mu, sigma, min_clamp, max_clamp). mu is the natural log of the
+# distribution median; sigma controls the spread of the log-space tail.
+#
+# Real-world transaction amounts are heavy-tailed (many small purchases,
+# few large transfers) — much closer to log-normal than uniform. The
+# previous uniform draw produced a Gaussian-ish stddev under the ZSCORE
+# rule's baseline statistics, which is unrealistic. Calibrated from
+# informal observation of Vietnamese retail / SMB patterns:
+#   - purchase:   median ~300K  (5-95% ≈ 41K - 2.2M)
+#   - transfer:   median ~5M    (5-95% ≈ 425K - 58M)
+#   - withdrawal: median ~1M    (5-95% ≈ 188K - 5.3M)
+#   - deposit:    median ~5M    (5-95% ≈ 425K - 58M, salary etc.)
+#   - refund:     median ~200K  (5-95% ≈ 27K - 1.5M)
+AMOUNT_PARAMS = {
+    "purchase":   (12.61, 1.2, 1_000, 200_000_000),
+    "transfer":   (15.42, 1.5, 1_000, 500_000_000),
+    "withdrawal": (13.82, 1.0, 1_000,  50_000_000),
+    "deposit":    (15.42, 1.5, 1_000, 500_000_000),
+    "refund":     (12.21, 1.2, 1_000, 100_000_000),
 }
+
+
+def synthetic_amount(txn_type: str) -> float:
+    """Draw a log-normal amount in VND, clamped to a realistic min/max."""
+    mu, sigma, lo, hi = AMOUNT_PARAMS[txn_type]
+    return round(max(lo, min(hi, random.lognormvariate(mu, sigma))), 2)
 
 
 def get_connection():
@@ -74,8 +93,7 @@ def load_ids(conn, exclude_high_risk: bool = False):
 def generate_transaction(account_ids, merchants):
     """Generate a single random transaction (status is decided by the ledger)."""
     txn_type = random.choices(TRANSACTION_TYPES, weights=TYPE_WEIGHTS, k=1)[0]
-    lo, hi = AMOUNT_RANGES[txn_type]
-    amount = round(random.uniform(lo, hi), 2)
+    amount = synthetic_amount(txn_type)
     merchant = random.choice(merchants)
     return {
         "account_id": random.choice(account_ids),

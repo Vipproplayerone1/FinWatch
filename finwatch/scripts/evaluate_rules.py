@@ -599,9 +599,21 @@ def write_report(out_dir: Path, run_id: str, args: argparse.Namespace,
 
 
 def cleanup(conn, run_id: str) -> tuple[int, int]:
-    """Delete this run's transactions then accounts."""
+    """Delete fraud_alerts -> transactions -> accounts for this eval run.
+
+    fraud_alerts is cleaned first because the fraud-worker may have ticked
+    during the eval and created cases that FK to eval accounts. Without
+    this, the final DELETE FROM accounts violates the FK constraint.
+    """
     pattern = f"eval-{run_id}-%@finwatch.local"
     with conn.cursor() as cur:
+        cur.execute(
+            """
+            DELETE FROM fraud_alerts
+            WHERE account_id IN (SELECT id FROM accounts WHERE email LIKE %s)
+            """,
+            (pattern,),
+        )
         cur.execute(
             """
             DELETE FROM transactions

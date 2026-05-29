@@ -40,6 +40,7 @@ CLAUDE.md
 **/CLAUDE.md
 AGENTS.md
 **/AGENTS.md
+.serena/
 .cursor/
 .cursorrules
 .aider*
@@ -47,6 +48,13 @@ AGENTS.md
 .github/copilot-instructions.md
 .windsurfrules
 .codeium/
+.gemini/
+.aikido/
+.roo/
+.cline/
+.clinerules
+.sourcegraph/
+.tabnine/
 *.swp
 *.swo
 .DS_Store
